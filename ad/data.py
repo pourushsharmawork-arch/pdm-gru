@@ -7,7 +7,7 @@ COLUMNS_TO_DROP = [0, 1, 2, 3, 4, 5, 9, 10, 14, 20, 22, 23]
 
 def load_fd001(data_dir:str, subset:str="FD001")->pd.DataFrame:
     train_data = pd.read_csv(os.path.join(data_dir,"train",f"train_{subset}.txt"),sep=r"\s+",header=None)
-    print(train_data.info())
+    # print(train_data.info())
     return train_data
 
 def add_rul(data:pd.DataFrame)->pd.DataFrame:

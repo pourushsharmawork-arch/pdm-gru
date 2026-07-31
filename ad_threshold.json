@@ -1,0 +1,10 @@
+{
+  "percentile": 95.0,
+  "threshold": 0.5275973081588745,
+  "threshold_p95": 0.5275973081588745,
+  "threshold_p99": 0.5517784953117371,
+  "val_mse_mean": 0.46175479888916016,
+  "val_mse_std": 0.03600715100765228,
+  "num_val_windows": 1356,
+  "checkpoint": "./vae_checkpoint.pt"
+}
