@@ -9,29 +9,11 @@ from torch.utils.data import DataLoader, TensorDataset
 from sklearn.preprocessing import MinMaxScaler, StandardScaler
 from sklearn.metrics import mean_absolute_error, mean_squared_error
 
-from data import process_input, process_targets, process_test
+from data import process_input, process_targets, process_test, load_cmapss, preprocess
 from models.classical import Decoder, Encoder, Seq2Seq
 from models.quantum import QEncoder
 
 COLUMNS_TO_DROP = [0, 1, 2, 3, 4, 5, 9, 10, 14, 20, 22, 23]
-
-
-def load_cmapss(data_dir, subset):
-    train_data = pd.read_csv(os.path.join(data_dir, "train", f"train_{subset}.txt"), sep=r"\s+", header=None)
-    test_data = pd.read_csv(os.path.join(data_dir, "test", f"test_{subset}.txt"), sep=r"\s+", header=None)
-    true_rul = pd.read_csv(os.path.join(data_dir, f"RUL_{subset}.txt"), sep=r"\s+", header=None)[0].values
-    return train_data, test_data, true_rul
-
-
-def preprocess(train_data, test_data):
-    train_ids, test_ids = train_data[0], test_data[0]
-    scaler = StandardScaler()
-    train_scaled = scaler.fit_transform(train_data.drop(columns=COLUMNS_TO_DROP))
-    test_scaled = scaler.transform(test_data.drop(columns=COLUMNS_TO_DROP))
-    train_data = pd.DataFrame(np.c_[train_ids, train_scaled])
-    test_data = pd.DataFrame(np.c_[test_ids, test_scaled])
-    return train_data, test_data, scaler
-
 
 def build_train_set(train_data, window_length, shift, max_rul):
     all_X, all_y = [], []
