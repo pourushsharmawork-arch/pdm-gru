@@ -1,3 +1,7 @@
 *.png
 *.ipynb
+*.pt
+*.json
+*.pkl
+data/
 __pycache__/
