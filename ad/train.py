@@ -1,3 +1,5 @@
+import argparse
+
 import torch
 import torch.nn.functional as F
 from torch.utils.data import TensorDataset, DataLoader
@@ -45,23 +47,6 @@ def train_epoch(model, loader, optimizer, device, beta):
     n = len(loader.dataset)
     return total_loss / n, total_recon / n, total_kl / n
 
-def train_epoch(model, loader, optimizer, device, beta):
-    model.train()
-    total_loss = total_recon = total_kl = 0.0
-    for (x,) in loader:
-        x = x.to(device)
-        optimizer.zero_grad()
-        recon, mu, logvar = model(x)
-        loss, recon_loss, kl_loss = vae_loss(recon, x, mu, logvar, beta)
-        loss.backward()
-        torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=5.0)
-        optimizer.step()
-        total_loss += loss.item() * x.size(0)
-        total_recon += recon_loss.item() * x.size(0)
-        total_kl += kl_loss.item() * x.size(0)
-    n = len(loader.dataset)
-    return total_loss / n, total_recon / n, total_kl / n
-
 @torch.no_grad()
 def validate(model, loader, device, beta):
     model.eval()
@@ -76,6 +61,12 @@ def validate(model, loader, device, beta):
     return total_loss / n, total_recon / n
 
 def main():
+    parser = argparse.ArgumentParser(description="Train the VAE anomaly detector on healthy CMAPSS windows.")
+    parser.add_argument("--beta-max", type=float, default=1.0,
+                         help="KL weight reached at the end of warmup (see get_beta). Lower values "
+                              "prioritize reconstruction fidelity over a tightly-regularized latent space.")
+    args = parser.parse_args()
+
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     model = VAE(input_size=14, hidden_size=64, num_layers=1, latent_dim=16).to(device)
     optimizer = torch.optim.Adam(model.parameters(), lr=1e-3)
@@ -86,7 +77,7 @@ def main():
     num_epochs = 200
 
     for epoch in range(num_epochs):
-        beta = get_beta(epoch, warmup_epochs=20, beta_max=1.0)
+        beta = get_beta(epoch, warmup_epochs=20, beta_max=args.beta_max)
         train_loss, train_recon, train_kl = train_epoch(model, train_loader, optimizer, device, beta)
         val_loss, val_recon = validate(model, val_loader, device, beta)
         print(f"epoch {epoch:3d} | beta {beta:.2f} | "

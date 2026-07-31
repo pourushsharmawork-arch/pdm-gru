@@ -10,9 +10,9 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 from sklearn.metrics import mean_absolute_error, mean_squared_error
 
-from data import process_input, process_test, load_cmapss
-from models.classical import Decoder, Encoder, Seq2Seq
-from models.quantum import QEncoder
+from rul.data import process_input, process_test, load_cmapss
+from rul.models.classical import Decoder, Encoder, Seq2Seq
+from rul.models.quantum import QEncoder
 
 
 def load_checkpoint(path, device, model):
@@ -145,7 +145,7 @@ def visualize_rul(mode, net, test_data, true_rul, target_scaler, window_length, 
 def main():
     p = argparse.ArgumentParser()
     p.add_argument("--checkpoint", required=True)
-    p.add_argument("--data-dir", default="./data")
+    p.add_argument("--data-dir", default="data")
     p.add_argument("--subset", default=None, help="defaults to subset stored in checkpoint")
     p.add_argument("--mode", choices=["overall", "engine"], default="overall")
     p.add_argument("--engine-id", type=int, default=None, help="required when --mode engine")
