@@ -2,11 +2,6 @@ import torch
 import torch.nn as nn
 import pennylane as qml
 
-# ---------------------------------------------------------------------------
-# Core quantum primitive: a VQC layer (angle embedding -> entangling ansatz ->
-# PauliZ expectations). This is the reusable building block for everything
-# below. Swap "default.qubit" for "lightning.qubit" for a real speedup.
-# ---------------------------------------------------------------------------
 def make_qlayer(n_qubits, n_qlayers, dev_name="default.qubit"):
     dev = qml.device(dev_name, wires=n_qubits)
 
@@ -19,15 +14,6 @@ def make_qlayer(n_qubits, n_qlayers, dev_name="default.qubit"):
     weight_shapes = {"weights": (n_qlayers, n_qubits)}
     return qml.qnn.TorchLayer(circuit, weight_shapes)
 
-
-# ---------------------------------------------------------------------------
-# QLSTM cell (Chen et al. 2020 style): each classical gate (f, i, g, o) is
-# implemented as linear-in -> VQC -> linear-out instead of a plain nn.Linear.
-# This is the same pattern as QAD's QLSTM. Single-layer only — stacking
-# num_layers here means stacking cells, each with 4 VQCs, which is expensive
-# on a simulator. Keep n_qubits small (4-6) and expect this to be much
-# slower per step than nn.GRU.
-# ---------------------------------------------------------------------------
 class QLSTMCell(nn.Module):
     def __init__(self, input_size, hidden_size, n_qubits=4, n_qlayers=2):
         super().__init__()
@@ -88,13 +74,7 @@ def reparam(mu, logvar):
     return mu + eps * std
 
 
-# ===========================================================================
-# OPTION A — Full quantum: QLSTM replaces GRU in both encoder and decoder,
-# bottleneck stays classical. This is the direct architectural mirror of
-# your QAD QLSTM and is what you'd pitch as "the quantum VAE." Cost:
-# seq_len * 4 VQC calls per direction per forward pass — slow on
-# default.qubit for C-MAPSS-length windows. Test on short windows first.
-# ===========================================================================
+# OPTION A — Full quantum: QLSTM replaces GRU in both encoder and decoder, bottleneck stays classical. 
 class QEncoder(nn.Module):
     def __init__(self, hidden_size, input_size, n_qubits=4, n_qlayers=2):
         super().__init__()
@@ -147,15 +127,7 @@ class QVAE_FullQuantum(nn.Module):
         return recon, mu, logvar
 
 
-# ===========================================================================
-# OPTION B — Quantum bottleneck only: encoder/decoder stay classical GRU
-# (cheap, matches your existing baseline), only the latent space is
-# quantum. mu comes straight off PauliZ expectations, so it's naturally
-# bounded in [-1, 1] instead of unconstrained like the classical fc_mu —
-# a genuinely different (not just relabeled) prior geometry, and the part
-# most likely to show measurable anomaly-detection lift for the compute
-# cost. Requires latent_dim == n_qubits.
-# ===========================================================================
+# OPTION B — Quantum bottleneck only: encoder/decoder stay classical GRU, only the latent space is quantum.
 class Encoder(nn.Module):
     def __init__(self, num_hidden, num_layers, input_size, dropout=0):
         super().__init__()
