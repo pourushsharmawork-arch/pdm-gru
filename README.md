@@ -3,7 +3,7 @@
 Predictive maintenance on the NASA C-MAPSS turbofan degradation dataset (FD001). Two independent pipelines live in this repo:
 
 - **`rul/`** — Remaining Useful Life regression: predict how many cycles an engine has left, via a GRU seq2seq model with additive attention (with an optional quantum-layer variant of the encoder).
-- **`ad/`** — Anomaly Detection: a GRU-VAE trained only on healthy engine data, used to flag abnormal sensor windows via reconstruction error, with no failure labels involved in training.
+- **`ad/`** — Anomaly Detection: a GRU-VAE trained only on healthy engine data, used to flag abnormal sensor windows via reconstruction error, with no failure labels involved in training (with an optional quantum-circuit variant of the model, `--model quantum`).
 
 Both read the same raw C-MAPSS files under `data/` (`train/train_FD001.txt`, `test/test_FD001.txt`, `RUL_FD001.txt`) but preprocess and model them independently — there's no shared code between the two folders.
 
@@ -49,7 +49,7 @@ Both modes save a `.png` (`--output`, default `rul_predictions.png`) and can `--
 
 ## AD
 
-Location: `ad/`. Trains a GRU-VAE (`ad/model.py`) on **healthy-only** windows (`RUL >= healthy_rul_threshold`, default 100) — the model never sees failure data or labels during training. Anomalies are then detected purely from reconstruction error at inference time: healthy windows reconstruct well, anomalous ones don't.
+Location: `ad/`. Trains a GRU-VAE (`ad/models/classical.py`) on **healthy-only** windows (`RUL >= healthy_rul_threshold`, default 100) — the model never sees failure data or labels during training. Anomalies are then detected purely from reconstruction error at inference time: healthy windows reconstruct well, anomalous ones don't. `ad/models/quantum.py` swaps in a PennyLane variational circuit as an alternate model (`--model quantum`), in one of two modes (`--quantum_mode`): `bottleneck` (default) keeps the GRU encoder/decoder classical and only makes the latent `mu`/`logvar` come off PauliZ expectations instead of a plain linear layer, while `full` replaces the encoder and decoder with quantum-gated (QLSTM) recurrent cells as well.
 
 ### Pipeline
 
@@ -61,7 +61,8 @@ ad/datagen.py   generate_synthetic_data(): builds a labeled evaluation set from
                 X_test_normal by injecting one of 4 synthetic anomaly types (bias,
                 spike, drift, noise) into half the windows. Saved in CMAPSS-style
                 whitespace .txt format to data/synthetic/.
-ad/model.py     VAE: GRU encoder -> (mu, logvar) bottleneck -> GRU decoder.
+ad/models/      classical.py: GRU encoder -> (mu, logvar) bottleneck -> GRU decoder.
+                quantum.py: PennyLane variants (bottleneck-only or fully quantum).
 ad/train.py     Trains the VAE with a beta-annealed KL term (vae_loss), early
                 stopping on val reconstruction+KL loss. Saves vae_checkpoint.pt +
                 scaler.pkl.
@@ -85,6 +86,7 @@ All commands run from the repo root (`ad/`'s imports are package-relative, e.g. 
 ```bash
 python -m ad.datagen                                  # builds data/synthetic/{synthetic,labels}_FD001.txt
 python -m ad.train --beta-max 1.0                      # trains, saves vae_checkpoint.pt + scaler.pkl
+# add --model quantum (--quantum_mode bottleneck|full) to use a PennyLane-based model instead of the default GRU-VAE
 python -m ad.threshold --checkpoint vae_checkpoint.pt   # saves ad_threshold.json
 python -m ad.evaluate --checkpoint vae_checkpoint.pt --scaler scaler.pkl
 ```
