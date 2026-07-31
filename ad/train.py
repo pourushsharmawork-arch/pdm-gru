@@ -4,7 +4,8 @@ import torch
 import torch.nn.functional as F
 from torch.utils.data import TensorDataset, DataLoader
 from ad.data import prepare_data
-from ad.model import Encoder, VAE, VAEBottleneck, VAEDecoder, reparam
+from ad.models.classical import Encoder, VAE, VAEBottleneck, VAEDecoder, reparam
+from ad.models.quantum import QVAE_BottleneckOnly, QVAE_FullQuantum
 import copy
 import joblib
 
@@ -65,10 +66,22 @@ def main():
     parser.add_argument("--beta-max", type=float, default=1.0,
                          help="KL weight reached at the end of warmup (see get_beta). Lower values "
                               "prioritize reconstruction fidelity over a tightly-regularized latent space.")
+    parser.add_argument("--model", type=str, default="classical")
+    parser.add_argument("--quantum_mode", type=str, default="bottleneck")
     args = parser.parse_args()
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    model = VAE(input_size=14, hidden_size=64, num_layers=1, latent_dim=16).to(device)
+    if args.model == "classical":
+        model = VAE(input_size=14, hidden_size=64, num_layers=1, latent_dim=16).to(device)
+    elif args.model == "quantum":
+        if args.quantum_mode == "bottleneck":
+            model = QVAE_BottleneckOnly(input_size=14,hidden_size=32,num_layers=1,latent_dim=4,dropout=0.0,n_qlayers=1,).to(device)
+        elif args.quantum_model == "full":
+            model = model = QVAE_FullQuantum(input_size=14,hidden_size=8,latent_dim=4,n_qubits=4,n_qlayers=1,).to(device)
+        else:
+            raise NotImplementedError("quantum_mode must be `bottleneck` or `full`")       
+    else:
+        raise NotImplementedError("model must be either quantum or classical.")
     optimizer = torch.optim.Adam(model.parameters(), lr=1e-3)
 
     best_val_loss = float("inf")
@@ -84,14 +97,15 @@ def main():
             f"train {train_loss:.4f} (recon {train_recon:.4f}, kl {train_kl:.4f}) | "
             f"val {val_loss:.4f} (recon {val_recon:.4f})")
 
-        if val_loss<best_val_loss:
+        if val_loss < best_val_loss:
             best_val_loss = val_loss
             best_state = copy.deepcopy(model.state_dict())
             patience_counter = 0
         else:
             patience_counter += 1
+
             if patience_counter >= patience:
-                print(f"early stopping at epoch{epoch}")
+                print(f"early stopping at epoch {epoch}")
                 break
     model.load_state_dict(best_state)
     torch.save({"model_state_dict": best_state,"config": {"input_size": 14, "hidden_size": 64, "num_layers": 1, "latent_dim": 16},}, "vae_checkpoint.pt")
