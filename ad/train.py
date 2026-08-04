@@ -73,6 +73,7 @@ def main():
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     if args.model == "classical":
         model = VAE(input_size=14, hidden_size=64, num_layers=1, latent_dim=16).to(device)
+        args.quantum_mode = ""
     elif args.model == "quantum":
         if args.quantum_mode == "bottleneck":
             model = QVAE_BottleneckOnly(input_size=14,hidden_size=32,num_layers=1,latent_dim=4,dropout=0.0,n_qlayers=1,).to(device)
@@ -108,7 +109,7 @@ def main():
                 print(f"early stopping at epoch {epoch}")
                 break
     model.load_state_dict(best_state)
-    torch.save({"model_state_dict": best_state,"config": {"input_size": 14, "hidden_size": 64, "num_layers": 1, "latent_dim": 16},}, "vae_checkpoint.pt")
+    torch.save({"model_state_dict": best_state,"config": {"input_size": 14, "hidden_size": 64, "num_layers": 1, "latent_dim": 16},}, f"{args.model}{args.quantum_mode}vae_checkpoint.pt")
     joblib.dump(scaler, "scaler.pkl")
 
 if __name__ == "__main__":
