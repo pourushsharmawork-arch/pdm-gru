@@ -3,5 +3,6 @@
 *.pt
 *.json
 *.pkl
+.claude/
 data/
 __pycache__/
