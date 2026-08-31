@@ -10,9 +10,9 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 from sklearn.metrics import mean_absolute_error, mean_squared_error
 
-from data import process_input, process_test
-from models.classical import Decoder, Encoder, Seq2Seq
-from models.quantum import QEncoder
+from rul.data import process_input, process_test, load_cmapss
+from rul.models.classical import Decoder, Encoder, Seq2Seq
+from rul.models.quantum import QEncoder
 
 
 def load_checkpoint(path, device, model):
@@ -26,12 +26,6 @@ def load_checkpoint(path, device, model):
     net.load_state_dict(ckpt["model_state"])
     net.eval()
     return net, ckpt
-
-
-def load_cmapss_test(data_dir, subset):
-    test_data = pd.read_csv(os.path.join(data_dir, "test", f"test_{subset}.txt"), sep=r"\s+", header=None)
-    true_rul = pd.read_csv(os.path.join(data_dir, f"RUL_{subset}.txt"), sep=r"\s+", header=None)[0].values
-    return test_data, true_rul
 
 
 def scale_test_data(test_data, feature_scaler, columns_to_drop):
@@ -151,7 +145,7 @@ def visualize_rul(mode, net, test_data, true_rul, target_scaler, window_length, 
 def main():
     p = argparse.ArgumentParser()
     p.add_argument("--checkpoint", required=True)
-    p.add_argument("--data-dir", default="./data")
+    p.add_argument("--data-dir", default="data")
     p.add_argument("--subset", default=None, help="defaults to subset stored in checkpoint")
     p.add_argument("--mode", choices=["overall", "engine"], default="overall")
     p.add_argument("--engine-id", type=int, default=None, help="required when --mode engine")
@@ -172,7 +166,7 @@ def main():
     subset = args.subset or ckpt["subset"]
     print(f"inferring using {args.model} model.")
 
-    test_data, true_rul = load_cmapss_test(args.data_dir, subset)
+    _, test_data, true_rul = load_cmapss(args.data_dir, subset)
     test_data = scale_test_data(test_data, ckpt["feature_scaler"], ckpt["columns_to_drop"])
 
     shift = args.traj_shift if (args.mode == "engine" and args.traj_shift is not None) else ckpt["shift"]

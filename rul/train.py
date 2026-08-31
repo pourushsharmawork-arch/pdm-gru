@@ -1,4 +1,5 @@
 import argparse
+import copy
 import os
 
 import numpy as np
@@ -9,28 +10,18 @@ from torch.utils.data import DataLoader, TensorDataset
 from sklearn.preprocessing import MinMaxScaler, StandardScaler
 from sklearn.metrics import mean_absolute_error, mean_squared_error
 
-from data import process_input, process_targets, process_test
-from models.classical import Decoder, Encoder, Seq2Seq
-from models.quantum import QEncoder
+from rul.data import process_input, process_targets, process_test, load_cmapss, preprocess
+from rul.models.classical import Decoder, Encoder, Seq2Seq
+from rul.models.quantum import QEncoder
 
 COLUMNS_TO_DROP = [0, 1, 2, 3, 4, 5, 9, 10, 14, 20, 22, 23]
 
-
-def load_cmapss(data_dir, subset):
-    train_data = pd.read_csv(os.path.join(data_dir, "train", f"train_{subset}.txt"), sep=r"\s+", header=None)
-    test_data = pd.read_csv(os.path.join(data_dir, "test", f"test_{subset}.txt"), sep=r"\s+", header=None)
-    true_rul = pd.read_csv(os.path.join(data_dir, f"RUL_{subset}.txt"), sep=r"\s+", header=None)[0].values
-    return train_data, test_data, true_rul
-
-
-def preprocess(train_data, test_data):
-    train_ids, test_ids = train_data[0], test_data[0]
-    scaler = StandardScaler()
-    train_scaled = scaler.fit_transform(train_data.drop(columns=COLUMNS_TO_DROP))
-    test_scaled = scaler.transform(test_data.drop(columns=COLUMNS_TO_DROP))
-    train_data = pd.DataFrame(np.c_[train_ids, train_scaled])
-    test_data = pd.DataFrame(np.c_[test_ids, test_scaled])
-    return train_data, test_data, scaler
+def split_train_engines(train_data, val_fraction=0.15, seed=0):
+    engine_ids = train_data[0].unique()
+    rng = np.random.default_rng(seed)
+    engine_ids = rng.permutation(engine_ids)
+    val_end = int(len(engine_ids) * val_fraction)
+    return engine_ids[val_end:], engine_ids[:val_end]
 
 
 def build_train_set(train_data, window_length, shift, max_rul):
@@ -38,24 +29,35 @@ def build_train_set(train_data, window_length, shift, max_rul):
     for engine_id in np.sort(train_data[0].unique()):
         engine = train_data[train_data[0] == engine_id].drop(columns=[0]).values
         if len(engine) < window_length:
-            raise AssertionError(f"train engine {engine_id}: fewer rows than window_length={window_length}")
+            print(f"skipping train engine {engine_id}: {len(engine)} rows < window_length={window_length}")
+            continue
         targets = process_targets(engine.shape[0], max_rul=max_rul)
         X, y = process_input(engine, targets, window_length, shift)
         all_X.append(X)
         all_y.append(y)
+    if not all_X:
+        raise ValueError(f"no engines had >= window_length={window_length} rows")
     return np.concatenate(all_X).astype(np.float32), np.concatenate(all_y).astype(np.float32)
 
 
 def build_test_set(test_data, window_length, shift, num_test_windows):
-    all_X, windows_per_engine = [], []
-    for engine_id in np.sort(test_data[0].unique()):
+    """Returns X, the window count per kept engine, and the 0-indexed position
+    (in sorted-engine-id order) of each kept engine -- callers must filter
+    true_rul (which is ordered the same way) by kept_positions, since a
+    skipped engine would otherwise desync predictions from their true RUL."""
+    all_X, windows_per_engine, kept_positions = [], [], []
+    for position, engine_id in enumerate(np.sort(test_data[0].unique())):
         engine = test_data[test_data[0] == engine_id].drop(columns=[0]).values
         if len(engine) < window_length:
-            raise AssertionError(f"test engine {engine_id}: fewer rows than window_length={window_length}")
+            print(f"skipping test engine {engine_id}: {len(engine)} rows < window_length={window_length}")
+            continue
         X, n = process_test(engine, window_length, shift, num_test_windows)
         all_X.append(X)
         windows_per_engine.append(n)
-    return np.concatenate(all_X).astype(np.float32), windows_per_engine
+        kept_positions.append(position)
+    if not all_X:
+        raise ValueError(f"no engines had >= window_length={window_length} rows")
+    return np.concatenate(all_X).astype(np.float32), windows_per_engine, kept_positions
 
 
 def compute_s_score(rul_true, rul_pred):
@@ -80,6 +82,20 @@ def train_one_epoch(net, loader, optimizer, loss_fn, device):
 
 
 @torch.no_grad()
+def validate_epoch(net, loader, loss_fn, device):
+    net.eval()
+    total_loss, n_batches = 0.0, 0
+    for X, y in loader:
+        X, y = X.to(device), y.to(device)
+        dec_input = X[:, -1:, :]
+        y_hat, _ = net(X, dec_input)
+        loss = loss_fn(y_hat.squeeze(-1), y)
+        total_loss += loss.item()
+        n_batches += 1
+    return total_loss / n_batches
+
+
+@torch.no_grad()
 def predict(net, X, device, batch_size=256):
     net.eval()
     preds = []
@@ -93,7 +109,7 @@ def predict(net, X, device, batch_size=256):
 
 def main():
     p = argparse.ArgumentParser()
-    p.add_argument("--data-dir", default="./data", help="dir containing train_/test_/RUL_ txt files")
+    p.add_argument("--data-dir", default="data", help="dir containing train_/test_/RUL_ txt files")
     p.add_argument("--subset", default="FD001")
     p.add_argument("--window-length", type=int, default=30)
     p.add_argument("--shift", type=int, default=1)
@@ -103,14 +119,16 @@ def main():
     p.add_argument("--num-layers", type=int, default=2)
     p.add_argument("--attention-size", type=int, default=32)
     p.add_argument("--batch-size", type=int, default=128)
-    p.add_argument("--epochs", type=int, default=15)
+    p.add_argument("--epochs", type=int, default=15, help="max epochs; early stopping may end training sooner")
+    p.add_argument("--patience", type=int, default=5, help="epochs without val-loss improvement before stopping")
+    p.add_argument("--val-fraction", type=float, default=0.15, help="fraction of train engines held out for validation")
     p.add_argument("--lr", type=float, default=1e-3)
     p.add_argument("--dropout", type=float, default=0.0)
     p.add_argument("--seed", type=int, default=0)
     p.add_argument("--save-path", default="./saved_weights/seq2seq_rul.pt")
     p.add_argument("--model", default="classical", help="quantum or classical model")
-    p.add_argument("--n_qubits", default=10)
-    p.add_argument("--n_ql_layers", default=3)
+    p.add_argument("--n_qubits", type=int, default=10)
+    p.add_argument("--n_ql_layers", type=int, default=3)
     args = p.parse_args()
 
     torch.manual_seed(args.seed)
@@ -118,25 +136,45 @@ def main():
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print("device:", device)
 
-    train_data, test_data, true_rul = load_cmapss(args.data_dir, args.subset)
-    train_data, test_data, feature_scaler = preprocess(train_data, test_data)
+    raw_train_data, test_data, true_rul = load_cmapss(args.data_dir, args.subset)
 
-    X_train, y_train = build_train_set(train_data, args.window_length, args.shift, args.max_rul)
-    X_test, windows_per_engine = build_test_set(test_data, args.window_length, args.shift, args.num_test_windows)
+    train_ids, val_ids = split_train_engines(raw_train_data, val_fraction=args.val_fraction, seed=args.seed)
+    train_only_raw = raw_train_data[raw_train_data[0].isin(train_ids)].copy()
+    val_only_raw = raw_train_data[raw_train_data[0].isin(val_ids)].copy()
+
+    # scaler is fit only on train_only_raw (preprocess()'s first arg), never on
+    # val engines or test engines, to avoid leaking their distribution into it.
+    train_scaled, test_scaled, feature_scaler = preprocess(train_only_raw, test_data)
+    val_features = feature_scaler.transform(val_only_raw.drop(columns=COLUMNS_TO_DROP))
+    val_scaled = pd.DataFrame(np.c_[val_only_raw[0].values, val_features])
+
+    X_train, y_train = build_train_set(train_scaled, args.window_length, args.shift, args.max_rul)
+    X_val, y_val = build_train_set(val_scaled, args.window_length, args.shift, args.max_rul)
+    X_test, windows_per_engine, kept_positions = build_test_set(
+        test_scaled, args.window_length, args.shift, args.num_test_windows
+    )
+    true_rul = true_rul[kept_positions]
 
     perm = np.random.permutation(len(y_train))
     X_train, y_train = X_train[perm], y_train[perm]
 
     target_scaler = MinMaxScaler(feature_range=(0, 1))
     y_train = target_scaler.fit_transform(y_train.reshape(-1, 1)).reshape(-1).astype(np.float32)
+    y_val = target_scaler.transform(y_val.reshape(-1, 1)).reshape(-1).astype(np.float32)
 
     print("train X", X_train.shape, "train y", y_train.shape)
+    print("val X", X_val.shape, "val y", y_val.shape)
     print("test X", X_test.shape, "engines", len(windows_per_engine))
 
     train_loader = DataLoader(
         TensorDataset(torch.from_numpy(X_train), torch.from_numpy(y_train)),
         batch_size=args.batch_size,
         shuffle=True,
+    )
+    val_loader = DataLoader(
+        TensorDataset(torch.from_numpy(X_val), torch.from_numpy(y_val)),
+        batch_size=args.batch_size,
+        shuffle=False,
     )
 
     num_features = X_train.shape[-1]
@@ -152,9 +190,26 @@ def main():
     optimizer = torch.optim.Adam(net.parameters(), lr=args.lr)
     loss_fn = nn.MSELoss()
 
+    best_val_loss = float("inf")
+    best_state = None
+    patience_counter = 0
+
     for epoch in range(args.epochs):
-        loss = train_one_epoch(net, train_loader, optimizer, loss_fn, device)
-        print(f"epoch {epoch + 1}/{args.epochs}  loss {loss:.6f}")
+        train_loss = train_one_epoch(net, train_loader, optimizer, loss_fn, device)
+        val_loss = validate_epoch(net, val_loader, loss_fn, device)
+        print(f"epoch {epoch + 1}/{args.epochs}  train_loss {train_loss:.6f}  val_loss {val_loss:.6f}")
+
+        if val_loss < best_val_loss:
+            best_val_loss = val_loss
+            best_state = copy.deepcopy(net.state_dict())
+            patience_counter = 0
+        else:
+            patience_counter += 1
+            if patience_counter >= args.patience:
+                print(f"early stopping at epoch {epoch + 1}")
+                break
+
+    net.load_state_dict(best_state)
 
     preds_scaled = predict(net, X_test, device)
     preds = target_scaler.inverse_transform(preds_scaled.reshape(-1, 1)).reshape(-1)
